@@ -19,6 +19,7 @@ import multiprocessing
 import time
 import traceback
 
+import netaddr
 from novaclient.v1_1 import servers
 
 from rally import exceptions
@@ -187,3 +188,32 @@ def check_service_status(client, service_name):
             if service.status == 'enabled' and service.state == 'up':
                 return True
     return False
+
+
+_network_cidr = None
+_subnet_cidrs = {}
+
+
+def generate_cidr(network=None, start_cidr="1.1.0.0/30"):
+    """Generate next CIDR for network or subnet, without IP overlapping.
+
+    :param network: None for generating cidr for network,
+                    network UUID for generating for subnet.
+    :returns: str, next available CIDR.
+    """
+    with multiprocessing.Lock():
+        if network:
+            if network in _subnet_cidrs:
+                crnt_cidr = _subnet_cidrs[network]
+                cidr = str(netaddr.IPNetwork(crnt_cidr).next())
+            else:
+                cidr = str(netaddr.IPNetwork(start_cidr))
+            _subnet_cidrs[network] = cidr
+        else:
+            global _network_cidr
+            if _network_cidr is None:
+                _network_cidr = start_cidr
+
+            cidr = str(netaddr.IPNetwork(_network_cidr).next())
+            _network_cidr = cidr
+    return cidr

@@ -491,3 +491,17 @@ class NovaScenarioTestCase(test.TestCase):
         nova_scenario._detach_volume(self.server, self.volume)
         self._test_atomic_action_timer(nova_scenario.atomic_actions(),
                                        'nova.detach_volume')
+
+    @mock.patch(NOVA_UTILS + '.NovaScenario.admin_clients')
+    def test__create_network(self, mock_clients):
+        nova_scenario = utils.NovaScenario()
+        nova_scenario._generate_random_name = mock.MagicMock(
+            return_value="test_network")
+
+        nova_scenario._create_network({}, '1.1.0.0/30')
+        expected = {'label': "test_network",
+                    'cidr': '1.1.0.0/30'}
+        mock_clients('nova').networks.create.assert_called_once_with(
+            **expected)
+        self._test_atomic_action_timer(nova_scenario.atomic_actions(),
+                                       'nova.create_network')

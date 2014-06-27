@@ -16,6 +16,7 @@
 import datetime
 
 import mock
+import netaddr
 
 from rally.benchmark import utils
 from rally import exceptions
@@ -175,6 +176,33 @@ class BenchmarkUtilsTestCase(test.TestCase):
         ret = utils.check_service_status(client, 'nova-network')
         self.assertFalse(ret)
         self.assertTrue(client.services.list.called)
+
+    def test_generate_cidr_for_subnet(self):
+        network1_id = "fake1"
+        network2_id = "fake2"
+        subnets_num = 300
+
+        cidrs1 = map(utils.generate_cidr,
+                     [network1_id] * subnets_num)
+
+        cidrs2 = map(utils.generate_cidr,
+                     [network2_id] * subnets_num)
+
+        # All CIDRs must differ
+        self.assertEqual(len(cidrs1), len(set(cidrs1)))
+        self.assertEqual(len(cidrs2), len(set(cidrs2)))
+
+        # All CIDRs must be valid
+        map(netaddr.IPNetwork, cidrs1 + cidrs2)
+
+    def test_generate_cidr_for_network(self):
+        cidrs = [utils.generate_cidr() for i in xrange(300)]
+
+        # All CIDRs must differ
+        self.assertEqual(len(cidrs), len(set(cidrs)))
+
+        # All CIDRs must be valid
+        map(netaddr.IPNetwork, cidrs)
 
 
 class WaitForTestCase(test.TestCase):

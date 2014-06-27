@@ -496,3 +496,19 @@ class NovaScenario(base.Scenario):
             check_interval=(
                     CONF.benchmark.nova_server_resize_revert_poll_interval)
         )
+
+    @base.atomic_action_timer('nova.create_network')
+    def _create_network(self, network_create_args={}, start_cidr=None):
+        """Create nova network by admin.
+
+        The default policy for nova network-create is admin only.
+
+        :param network_create_args: dict, POST /os-networks request options
+        :returns: Nova network dict
+        """
+        cidr = bench_utils.generate_cidr(start_cidr)
+        network_name = self._generate_random_name()
+        network_create_args.setdefault("label", network_name)
+        network_create_args.setdefault("cidr", cidr)
+        return self.admin_clients("nova").networks.create(
+            **network_create_args)
