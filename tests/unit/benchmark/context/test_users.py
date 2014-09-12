@@ -66,12 +66,12 @@ class UserGeneratorTestCase(test.TestCase):
 
     def test_create_tenant_users(self):
         users_num = 5
-        args = (mock.MagicMock(), users_num, 'default', 'default',
+        args = (mock.MagicMock(), users_num, 'default', 'default', None,
                 'ad325aec-f7b4-4a62-832a-bb718e465bb7', 1)
         result = users.UserGenerator._create_tenant_users(args)
 
-        self.assertEqual(len(result), 2)
-        tenant, users_ = result
+        self.assertEqual(len(result), 4)
+        tenant, users_, _, _ = result
         self.assertIn("id", tenant)
         self.assertIn("name", tenant)
         self.assertEqual(len(users_), users_num)

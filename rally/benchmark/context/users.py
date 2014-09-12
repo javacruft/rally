@@ -76,11 +76,16 @@ class UserGenerator(base.Context):
             "user_domain": {
                 "type": "string",
             },
+            "network_subnet": {
+                "type": "string",
+            },
         },
         "additionalProperties": False
     }
     PATTERN_TENANT = "ctx_rally_%(task_id)s_tenant_%(iter)i"
     PATTERN_USER = "ctx_rally_%(tenant_id)s_user_%(uid)d"
+    PATTERN_NETWORK = "ctx_rally_%(tenant_id)s_network_%(iter)i"
+    PATTERN_SUBNET = "ctx_rally_%(tenant_id)s_subnet_%(iter)i"
 
     def __init__(self, context):
         super(UserGenerator, self).__init__(context)
@@ -92,8 +97,14 @@ class UserGenerator(base.Context):
                                cfg.CONF.users_context.project_domain)
         self.config.setdefault("user_domain",
                                cfg.CONF.users_context.user_domain)
+        # NOTE: disable network creation by default
+        self.config.setdefault('network_subnet', None)
+
         self.context["users"] = []
         self.context["tenants"] = []
+        self.context["networks"] = []
+        self.context["subnets"] = []
+
         self.endpoint = self.context["admin"]["endpoint"]
         # NOTE(boris-42): I think this is the best place for adding logic when
         #                 we are using pre created users or temporary. So we
@@ -110,7 +121,8 @@ class UserGenerator(base.Context):
         :returns: tuple (dict tenant, list users)
         """
 
-        admin_endpoint, users_num, project_dom, user_dom, task_id, i = args
+        admin_endpoint, users_num, project_dom, user_dom, \
+            network_subnet, task_id, i = args
         users = []
 
         client = keystone.wrap(osclients.Clients(admin_endpoint).keystone())
@@ -135,7 +147,38 @@ class UserGenerator(base.Context):
                           "endpoint": user_endpoint,
                           "tenant_id": tenant.id})
 
-        return ({"id": tenant.id, "name": tenant.name}, users)
+        if network_subnet:
+            client = osclients.Clients(admin_endpoint).neutron()
+
+            LOG.debug("Creating network for tenant %s" % (tenant.id))
+            network_msg = {
+                'network': {
+                    'name': cls.PATTERN_NETWORK % {"tenant_id": tenant.id,
+                                                   "iter": i},
+                    'shared': False,
+                    'tenant_id': tenant.id
+                }
+            }
+            network = client.create_network(network_msg)['network']
+
+            LOG.debug("Creating subnet for tenant %s" % (tenant.id))
+            subnet_msg = {
+                'subnet': {
+                    'name': cls.PATTERN_SUBNET % {"tenant_id": tenant.id,
+                                                  "iter": i},
+                    'network_id': network['id'],
+                    'enable_dhcp': True,
+                    'cidr': network_subnet,
+                    'ip_version': 4,
+                    'tenant_id': tenant.id
+                }
+            }
+            subnet = client.create_subnet(subnet_msg)['subnet']
+        else:
+            subnet = network = None
+
+        return ({"id": tenant.id, "name": tenant.name}, users,
+                network, subnet)
 
     @staticmethod
     def _remove_associated_networks(admin_endpoint, tenants):
@@ -199,6 +242,38 @@ class UserGenerator(base.Context):
                             "Exception: %(ex)s" %
                             {"user_id": user["id"], "ex": ex})
 
+    @classmethod
+    def _delete_subnets(cls, args):
+        """Delete given subnets.
+
+        :param args: tuple arguments, for Pool.imap()
+        """
+        admin_endpoint, subnets = args
+        client = osclients.Clients(admin_endpoint).neutron()
+        for subnet in subnets:
+            try:
+                client.delete_subnet(subnet['id'])
+            except Exception as ex:
+                LOG.warning("Failed to delete subnet: %(subnet_id)s. "
+                            "Exception: %(ex)s" %
+                            {"subnet_id": subnet["id"], "ex": ex})
+
+    @classmethod
+    def _delete_networks(cls, args):
+        """Delete given networks.
+
+        :param args: tuple arguments, for Pool.imap()
+        """
+        admin_endpoint, networks = args
+        client = osclients.Clients(admin_endpoint).neutron()
+        for network in networks:
+            try:
+                client.delete_network(network['id'])
+            except Exception as ex:
+                LOG.warning("Failed to delete network: %(network_id)s. "
+                            "Exception: %(ex)s" %
+                            {"network_id": network["id"], "ex": ex})
+
     @rutils.log_task_wrapper(LOG.info, _("Enter context: `users`"))
     def setup(self):
         """Create tenants and users, using pool of threads."""
@@ -206,19 +281,24 @@ class UserGenerator(base.Context):
         users_num = self.config["users_per_tenant"]
 
         args = [(self.endpoint, users_num, self.config["project_domain"],
-                 self.config["user_domain"], self.task["uuid"], i)
+                 self.config["user_domain"], self.config["network_subnet"],
+                 self.task["uuid"], i)
                 for i in range(self.config["tenants"])]
 
         LOG.debug("Creating %d users using %s threads" % (
             users_num * self.config["tenants"], self.config["concurrent"]))
 
-        for tenant, users in utils.run_concurrent(
+        for tenant, users, network, subnet in utils.run_concurrent(
                 self.config["concurrent"],
                 UserGenerator,
                 "_create_tenant_users",
                 args):
             self.context["tenants"].append(tenant)
             self.context["users"] += users
+            if network:
+                self.context["networks"].append(network)
+            if subnet:
+                self.context["subnets"].append(subnet)
 
     @rutils.log_task_wrapper(LOG.info, _("Exit context: `users`"))
     def cleanup(self):
@@ -233,6 +313,24 @@ class UserGenerator(base.Context):
             UserGenerator,
             "_delete_users",
             [(self.endpoint, users) for users in users_chunks])
+
+        # Delete subnets
+        if 'subnets' in self.context:
+            subnet_chunks = utils.chunks(self.context["subnets"], concurrent)
+            utils.run_concurrent(
+                concurrent,
+                UserGenerator,
+                "_delete_subnets",
+                [(self.endpoint, subnet) for subnet in subnet_chunks])
+
+        # Delete networks
+        if 'networks' in self.context:
+            network_chunks = utils.chunks(self.context["networks"], concurrent)
+            utils.run_concurrent(
+                concurrent,
+                UserGenerator,
+                "_delete_networks",
+                [(self.endpoint, network) for network in network_chunks])
 
         # Delete tenants
         tenants_chunks = utils.chunks(self.context["tenants"], concurrent)
