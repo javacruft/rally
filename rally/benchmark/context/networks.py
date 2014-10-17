@@ -64,7 +64,8 @@ class Network(base.Context):
         neutron_scenario = neutron_utils.NeutronScenario(clients=admin_clients)
 
         network = neutron_scenario._create_network({"tenant_id": tenant_id})
-        subnet = neutron_scenario._create_subnet(network, {}, start_cidr)
+        subnet = neutron_scenario._create_subnet(network, {"tenant_id": tenant_id},
+                                                 start_cidr)
         router = neutron_scenario._create_router({"tenant_id": tenant_id},
                                                  True)
         neutron_scenario._add_interface_router(subnet['subnet'],
@@ -137,7 +138,7 @@ class Network(base.Context):
                         {"subnet_id": net['network']['subnet_id']})
                     neutron.delete_router(net['network']['router_id'])
                     neutron.delete_subnet(net['network']['subnet_id'])
-                    neutron.delete_network(net['network']['id'])
+                    neutron.delete_network(net['network']['network']['id'])
                 else:
                     clients.nova.networks.delete(net["network"])
             except Exception as e:
